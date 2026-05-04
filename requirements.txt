@@ -1,0 +1,8 @@
+# usda-nfc-les-parser requirements
+# Install with: pip install -r requirements.txt
+
+# Required
+pdfplumber>=0.10.0
+
+# Optional — needed for CSV output (--output csv)
+pandas>=2.0.0
