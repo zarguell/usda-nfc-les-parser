@@ -60,11 +60,20 @@ DEDUCTION_PATTERNS = [
 LEAVE_EARNINGS_PATTERNS = [
     ("50", "CREDIT HOURS"),
     ("51", "SEP MNTCE ALLOW TAXABLE"),
-    ("52", "CYCLE PROGRAM EARNINGS"),
+    ("52", "CYCLE PROGRAM"),
     ("61", "ANNUAL LEAVE"),
     ("62", "SICK LEAVE"),
     ("64", "COMPENSATORY LEAVE"),
     ("66", "OTHER LEAVE"),
+]
+
+# Some earnings items (e.g., 51, 52) appear with a single dollar amount instead of
+# hours+amount.  These are matched separately by a broader regex.
+SINGLE_AMOUNT_EARNINGS_CODES = [
+    ("51", "SEP MNTCE ALLOW TAXABLE"),
+    ("52", "CYCLE PROGRAM"),
+    ("44", "CASH AWARD"),
+    ("44", "QSI"),
 ]
 
 YTD_LEAVE_TYPES = [
@@ -180,8 +189,11 @@ def parse_les(pdf_path):
     # -----------------------------------------------------------------------
     # Gross pay
     # -----------------------------------------------------------------------
+    # pdfplumber often garbles multi-column headers (interleaved chars).
+    # Strategy: find "GROSS PAY" then grab the last 2 dollar amounts on that line
+    # (PP gross + YTD gross — the 80.00 before them is hours).
     m = re.search(
-        r'PAY PERIOD HOURS & GROSS PAY \*+\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)',
+        r'GROSS PAY.*?([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})',
         text
     )
     if m:
@@ -189,7 +201,7 @@ def parse_les(pdf_path):
         data["gross_pay_pp"]    = m.group(2)
         data["gross_pay_ytd"]   = m.group(3)
     else:
-        m = re.search(r'PAY PERIOD HOURS & GROSS PAY \*+\s+([\d,.]+)\s+([\d,.]+)', text)
+        m = re.search(r'GROSS PAY.*?([\d,]+\.\d{2})\s+([\d,]+\.\d{2})', text)
         if m:
             data["gross_pay_pp"]  = m.group(1)
             data["gross_pay_ytd"] = m.group(2)
@@ -239,6 +251,35 @@ def parse_les(pdf_path):
                 "amount":      m.group(2),
             })
     data["leave_earnings"] = leave_earnings
+
+    # -----------------------------------------------------------------------
+    # Earnings with single amount (no hours column) — e.g., 51, 52, 44
+    # -----------------------------------------------------------------------
+    for code, label in SINGLE_AMOUNT_EARNINGS_CODES:
+        # Already matched above with hours+amount format — skip
+        if any(le["code"] == code for le in leave_earnings):
+            continue
+        pattern = rf'{code}\s+.*?{re.escape(label)}\s+.*?([\d,]+\.\d{{2}})\s+([\d,]+\.\d{{2}})'
+        m = re.search(pattern, text)
+        if m:
+            leave_earnings.append({
+                "code":        code,
+                "description": label,
+                "hours":       "",
+                "amount":      m.group(1),
+                "ytd_amount":  m.group(2),
+            })
+        else:
+            # Try single column (PP amount only, no YTD)
+            pattern2 = rf'{code}\s+.*?{re.escape(label)}\s+([\d,]+\.\d{{2}})'
+            m2 = re.search(pattern2, text)
+            if m2:
+                leave_earnings.append({
+                    "code":        code,
+                    "description": label,
+                    "hours":       "",
+                    "amount":      m2.group(1),
+                })
 
     # -----------------------------------------------------------------------
     # YTD leave status (accrued / used / balance)
